@@ -116,7 +116,14 @@ const noAnimation = async (opts: TransitionOptions): Promise<TransitionResult> =
   const enteringEl = opts.enteringEl;
   const leavingEl = opts.leavingEl;
 
-  await waitForReady(opts, false);
+  /**
+   * Wait only in case when transition is not between tab pages.
+   * On tab pages switching we need fast changing so avoid wait.
+   * TODO: direction is 'none' for tab switching so Types should be changed in few files and then we can check is it direction equal to 'none'
+   */
+  if (opts.direction && ['back', 'forward'].includes(opts.direction)) {
+    await waitForReady(opts, false);
+  }
 
   fireWillEvents(enteringEl, leavingEl);
   fireDidEvents(enteringEl, leavingEl);

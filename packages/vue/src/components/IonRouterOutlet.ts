@@ -11,7 +11,13 @@ import {
   onUnmounted,
   Ref
 } from 'vue';
-import { AnimationBuilder, LIFECYCLE_DID_ENTER, LIFECYCLE_DID_LEAVE, LIFECYCLE_WILL_ENTER, LIFECYCLE_WILL_LEAVE } from '@ionic/core/components';
+import {
+  AnimationBuilder,
+  LIFECYCLE_DID_ENTER,
+  LIFECYCLE_DID_LEAVE,
+  LIFECYCLE_WILL_ENTER,
+  LIFECYCLE_WILL_LEAVE
+} from '@ionic/core/components';
 import { IonRouterOutlet as IonRouterOutletCmp } from '@ionic/core/components/ion-router-outlet.js';
 import { matchedRouteKey, routeLocationKey, useRoute } from 'vue-router';
 import { fireLifecycle, generateId, getConfig, defineCustomElement } from '../utils';
@@ -97,11 +103,19 @@ export const IonRouterOutlet = /*@__PURE__*/ defineComponent({
       );
 
       if (matchedDifferentRoutes || matchedDifferentParameterRoutes) {
-        setupViewItem(matchedRouteRef);
+        setupViewItem(matchedRouteRef.value);
         previousMatchedRouteRef = currentMatchedRouteRef;
         previousMatchedPath = currentRoute.path;
       }
     });
+
+    /**
+     * Based on router direction and last pathname we can check if is new transition
+     * just tab switching or not. If it is tab switching we need fast and sharp tab page change.
+     */
+    const isTabTransition = (routerDirection: any, lastPathname: string): boolean => {
+      return !!(routerDirection === 'none' && lastPathname);
+    }
 
     const canStart = () => {
       const config = getConfig();
@@ -123,7 +137,7 @@ export const IonRouterOutlet = /*@__PURE__*/ defineComponent({
     }
     const onStart = async () => {
       const routeInfo = ionRouter.getLeavingRouteInfo();
-      const { routerAnimation } = routeInfo;
+      const { routerAnimation, lastPathname } = routeInfo;
       const enteringViewItem = viewStacks.findViewItemByRouteInfo({ pathname: routeInfo.pushedByRoute || '' }, id);
       const leavingViewItem = viewStacks.findViewItemByRouteInfo(routeInfo, id);
 
@@ -133,12 +147,12 @@ export const IonRouterOutlet = /*@__PURE__*/ defineComponent({
         const leavingEl = leavingViewItem.ionPageElement;
 
         /**
-        * If we are going back from a page that
-        * was presented using a custom animation
-        * we should default to using that
-        * unless the developer explicitly
-        * provided another animation.
-        */
+         * If we are going back from a page that
+         * was presented using a custom animation
+         * we should default to using that
+         * unless the developer explicitly
+         * provided another animation.
+         */
         const customAnimation = enteringViewItem.routerAnimation;
         if (
           animationBuilder === undefined &&
@@ -154,6 +168,7 @@ export const IonRouterOutlet = /*@__PURE__*/ defineComponent({
           enteringEl,
           leavingEl,
           'back',
+          lastPathname,
           ionRouter.canGoBack(2),
           true,
           animationBuilder
@@ -198,11 +213,12 @@ export const IonRouterOutlet = /*@__PURE__*/ defineComponent({
       enteringEl: HTMLElement,
       leavingEl: HTMLElement,
       direction: any, // TODO types
+      lastPathname: string,
       showGoBack: boolean,
       progressAnimation: boolean,
       animationBuilder?: AnimationBuilder
     ) => {
-      return new Promise(resolve => {
+      return new Promise(async (resolve) => {
         if (skipTransition) {
           skipTransition = false;
           return resolve(false);
@@ -212,7 +228,20 @@ export const IonRouterOutlet = /*@__PURE__*/ defineComponent({
           return resolve(false);
         }
 
-        requestAnimationFrame(() => {
+        if (isTabTransition(direction, lastPathname)) {
+          enteringEl.classList.add('ion-page-invisible');
+
+          const result = await ionRouterOutlet.value.commit(enteringEl, leavingEl, {
+            deepWait: true,
+            duration: direction === undefined || direction === 'root' || direction === 'none' ? 0 : undefined,
+            direction,
+            showGoBack,
+            progressAnimation,
+            animationBuilder
+          });
+
+          return resolve(result);
+        } else {
           requestAnimationFrame(async () => {
             enteringEl.classList.add('ion-page-invisible');
 
@@ -227,15 +256,14 @@ export const IonRouterOutlet = /*@__PURE__*/ defineComponent({
 
             return resolve(result);
           });
-        });
+        }
       });
     }
 
-    const handlePageTransition = async () => {
+    const handlePageTransition = async (enteringViewItem: any) => {
       const routeInfo = ionRouter.getCurrentRouteInfo();
-      const { routerDirection, routerAction, routerAnimation, prevRouteLastPathname, delta } = routeInfo;
+      const { routerDirection, routerAction, routerAnimation, prevRouteLastPathname, delta, lastPathname } = routeInfo;
 
-      const enteringViewItem = viewStacks.findViewItemByRouteInfo(routeInfo, id);
       let leavingViewItem = viewStacks.findLeavingViewItemByRouteInfo(routeInfo, id);
       const enteringEl = enteringViewItem.ionPageElement;
 
@@ -287,12 +315,12 @@ See https://ionicframework.com/docs/vue/navigation#ionpage for more information.
         fireLifecycle(leavingViewItem.vueComponent, leavingViewItem.vueComponentRef, LIFECYCLE_WILL_LEAVE);
 
         /**
-        * If we are going back from a page that
-        * was presented using a custom animation
-        * we should default to using that
-        * unless the developer explicitly
-        * provided another animation.
-        */
+         * If we are going back from a page that
+         * was presented using a custom animation
+         * we should default to using that
+         * unless the developer explicitly
+         * provided another animation.
+         */
         const customAnimation = enteringViewItem.routerAnimation;
         if (
           animationBuilder === undefined &&
@@ -309,6 +337,7 @@ See https://ionicframework.com/docs/vue/navigation#ionpage for more information.
           enteringEl,
           leavingEl,
           routerDirection,
+          lastPathname,
           !!routeInfo.pushedByRoute,
           false,
           animationBuilder
@@ -346,10 +375,12 @@ See https://ionicframework.com/docs/vue/navigation#ionpage for more information.
 
       fireLifecycle(enteringViewItem.vueComponent, enteringViewItem.vueComponentRef, LIFECYCLE_DID_ENTER);
 
-      components.value = viewStacks.getChildrenToRender(id);
+      if (!isTabTransition(routerDirection, lastPathname)) {
+        components.value = viewStacks.getChildrenToRender(id);
+      }
     }
 
-    const setupViewItem = (matchedRouteRef: any) => {
+    const setupViewItem = (matchedRouteRefValue: any) => {
       const firstMatchedRoute = route.matched[0];
       if (!parentOutletPath) {
         parentOutletPath = firstMatchedRoute.path;
@@ -366,35 +397,44 @@ See https://ionicframework.com/docs/vue/navigation#ionpage for more information.
        * setups work better.
        */
       if (
-        !matchedRouteRef.value ||
-        (matchedRouteRef.value !== firstMatchedRoute && firstMatchedRoute.path !== parentOutletPath)
+        !matchedRouteRefValue ||
+        (matchedRouteRefValue !== firstMatchedRoute && firstMatchedRoute.path !== parentOutletPath)
       ) {
-          return;
+        return;
       }
 
+      let enteringViewItemExists = true;
       const currentRoute = ionRouter.getCurrentRouteInfo();
       let enteringViewItem = viewStacks.findViewItemByRouteInfo(currentRoute, id);
 
       if (!enteringViewItem) {
-        enteringViewItem = viewStacks.createViewItem(id, matchedRouteRef.value.components.default, matchedRouteRef.value, currentRoute);
+        enteringViewItemExists = false;
+        enteringViewItem = viewStacks.createViewItem(id, matchedRouteRefValue.components.default, matchedRouteRefValue, currentRoute);
         viewStacks.add(enteringViewItem);
       }
 
       if (!enteringViewItem.mount) {
         enteringViewItem.mount = true;
         enteringViewItem.registerCallback = () => {
-          handlePageTransition();
+          handlePageTransition(enteringViewItem);
           enteringViewItem.registerCallback = undefined;
         }
       } else {
-        handlePageTransition();
+        handlePageTransition(enteringViewItem);
       }
 
-      components.value = viewStacks.getChildrenToRender(id);
+      const routeInfo = ionRouter.getCurrentRouteInfo();
+      const { routerDirection, lastPathname } = routeInfo;
+      /**
+       * Only if new entering view does not exist, and it is not tab change then do render
+       */
+      if (!enteringViewItemExists || !isTabTransition(routerDirection, lastPathname)) {
+        components.value = viewStacks.getChildrenToRender(id);
+      }
     }
 
     if (matchedRouteRef.value) {
-      setupViewItem(matchedRouteRef);
+      setupViewItem(matchedRouteRef.value);
     }
 
     /**
@@ -418,19 +458,19 @@ See https://ionicframework.com/docs/vue/navigation#ionpage for more information.
       if (viewItem.registerCallback) {
         viewItem.registerCallback();
 
-      /**
-       * If there is no registerCallback, then
-       * this component is likely being re-registered
-       * as a result of a hot module replacement.
-       * We need to see if the oldIonPageEl has
-       * .ion-page-invisible. If it does not then we
-       * need to remove it from the new ionPageEl otherwise
-       * the page will be hidden when it is replaced.
-       */
+        /**
+         * If there is no registerCallback, then
+         * this component is likely being re-registered
+         * as a result of a hot module replacement.
+         * We need to see if the oldIonPageEl has
+         * .ion-page-invisible. If it does not then we
+         * need to remove it from the new ionPageEl otherwise
+         * the page will be hidden when it is replaced.
+         */
       } else if (oldIonPageEl && !oldIonPageEl.classList.contains('ion-page-invisible')) {
         ionPageEl.classList.remove('ion-page-invisible');
       }
-  };
+    };
     return {
       id,
       components,
@@ -485,8 +525,8 @@ See https://ionicframework.com/docs/vue/navigation#ionpage for more information.
           ? routePropsOption === true
             ? c.params
             : typeof routePropsOption === 'function'
-            ? getPropsFunctionResult()
-            : routePropsOption
+              ? getPropsFunctionResult()
+              : routePropsOption
           : null
 
         props = {
